@@ -27,10 +27,10 @@ app = Flask(__name__)
 
 # Bot configuration
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS').split(',')]
+ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
 PREMIUM_COST = 100  # Cost in your currency
 
-# Database simulation (in a real bot, use a proper database)
+# Database simulation
 users_db = {}
 keys_db = {}
 redeem_requests = {}
@@ -83,8 +83,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         handle_dev(query)
     elif query.data.startswith('service_'):
         handle_service_selection(query)
-    elif query.data == 'confirm_redeem':
-        handle_confirm_redeem(query, user_id, context)
     elif query.data == 'back_to_main':
         start(update, context)
 
@@ -112,37 +110,8 @@ def handle_redeem(query, user_id):
         parse_mode='HTML'
     )
 
-def handle_confirm_redeem(query, user_id, context):
-    user_data = users_db.get(user_id, {})
-    if not user_data.get('is_premium', False):
-        users_db[user_id]['redeem_used'] = True
-    
-    request_id = len(redeem_requests) + 1
-    redeem_requests[request_id] = {
-        'user_id': user_id,
-        'username': query.from_user.username,
-        'details': context.user_data.get('redeem_details'),
-        'status': 'pending'
-    }
-    
-    # Notify admin
-    for admin_id in ADMIN_IDS:
-        context.bot.send_message(
-            chat_id=admin_id,
-            text=f"📨 New Redeem Request (ID: {request_id})\n"
-                 f"From: @{query.from_user.username}\n"
-                 f"Details:\n{context.user_data['redeem_details']}\n\n"
-                 f"Use /approve {request_id} or /reject {request_id}"
-        )
-    
-    query.edit_message_text(
-        text="✅ Your redeem request has been submitted!\n"
-             "Admin will review it shortly."
-    )
-
 def handle_buy_premium(query, user_id):
     keyboard = [
-        [InlineKeyboardButton("Generate Key (Admin Only)", callback_data='gen_key')],
         [InlineKeyboardButton("Back", callback_data='back_to_main')]
     ]
     
@@ -280,64 +249,16 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
     except (ValueError, KeyError):
         update.message.reply_text("❌ Invalid user ID.")
 
-def admin_approve(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("❌ Admin only command.")
-        return
-    
-    if len(context.args) < 1 or not context.args[0].isdigit():
-        update.message.reply_text("Usage: /approve REQUEST_ID")
-        return
-    
-    request_id = int(context.args[0])
-    if request_id not in redeem_requests:
-        update.message.reply_text("❌ Invalid request ID.")
-        return
-    
-    request = redeem_requests[request_id]
-    request['status'] = 'approved'
-    
-    # Notify user
-    context.bot.send_message(
-        chat_id=request['user_id'],
-        text=f"✅ Your redeem request (ID: {request_id}) has been approved!\n\n"
-             f"Details will be sent shortly."
-    )
-    
-    update.message.reply_text(f"✅ Request {request_id} approved.")
-
-def admin_reject(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("❌ Admin only command.")
-        return
-    
-    if len(context.args) < 1 or not context.args[0].isdigit():
-        update.message.reply_text("Usage: /reject REQUEST_ID")
-        return
-    
-    request_id = int(context.args[0])
-    if request_id not in redeem_requests:
-        update.message.reply_text("❌ Invalid request ID.")
-        return
-    
-    request = redeem_requests[request_id]
-    request['status'] = 'rejected'
-    
-    # Notify user
-    context.bot.send_message(
-        chat_id=request['user_id'],
-        text=f"❌ Your redeem request (ID: {request_id}) has been rejected.\n\n"
-             f"Reason: {''.join(context.args[1:]) or 'Not specified'}"
-    )
-    
-    update.message.reply_text(f"✅ Request {request_id} rejected.")
-
 # Flask route for webhook
 @app.route('/' + TOKEN, methods=['POST'])
 def webhook():
     update = Update.de_json(request.get_json(force=True), updater.bot)
     dispatcher.process_update(update)
     return 'ok'
+
+@app.route('/')
+def index():
+    return "Bot is running!"
 
 # Set up handlers
 dispatcher.add_handler(CommandHandler('start', start))
@@ -346,15 +267,13 @@ dispatcher.add_handler(CommandHandler('broadcast', admin_broadcast))
 dispatcher.add_handler(CommandHandler('genk', admin_gen_key))
 dispatcher.add_handler(CommandHandler('ban', admin_ban))
 dispatcher.add_handler(CommandHandler('unban', admin_unban))
-dispatcher.add_handler(CommandHandler('approve', admin_approve))
-dispatcher.add_handler(CommandHandler('reject', admin_reject))
 
-# Start the bot
+def main():
+    # For production with webhook
+    updater.bot.set_webhook(url=f'https://your-render-app-name.onrender.com/{TOKEN}')
+    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+
 if __name__ == '__main__':
     # For local testing
     updater.start_polling()
     updater.idle()
-else:
-    # For production with webhook
-    updater.bot.set_webhook(url='https://your-render-url.com/' + TOKEN)
-    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
